@@ -4,6 +4,8 @@ from pydantic import BaseModel
 from typing import List
 from datetime import datetime
 from google import genai
+import os
+from pathlib import Path
 
 # Импортируем API ключ из config.py
 try:
@@ -24,6 +26,73 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Глобальная переменная для системного промпта
+SYSTEM_PROMPT = None
+
+
+def load_system_prompt(prompt_file: str = "prompts/system_prompt.txt") -> str:
+    """
+    Загружает системный промпт из файла.
+    Извлекает только содержимое внутри фигурных скобок {}.
+    Всё остальное считается комментариями и игнорируется.
+    
+    Args:
+        prompt_file: путь к файлу с промптом
+    
+    Returns:
+        str: содержимое промпта из фигурных скобок
+    """
+    try:
+        prompt_path = Path(__file__).parent / prompt_file
+        with open(prompt_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Ищем содержимое между { и }
+        import re
+        match = re.search(r'\{(.*?)\}', content, re.DOTALL)
+        
+        if match:
+            prompt = match.group(1).strip()
+            print(f"✅ Промпт извлечён из фигурных скобок")
+            return prompt
+        else:
+            print(f"⚠️  Фигурные скобки не найдены в файле. Используется весь файл как промпт.")
+            return content.strip()
+            
+    except FileNotFoundError:
+        print(f"⚠️  Файл {prompt_file} не найден. Используется дефолтный промпт.")
+        # Дефолтный промпт
+        return """Ты - умный ассистент для анализа диалогов и формирования ответов.
+
+ТВОЯ ЗАДАЧА:
+Проанализировать историю диалога с учётом временных меток и предложить уместный, естественный ответ.
+
+ВРЕМЕННОЙ КОНТЕКСТ:
+- Обращай внимание на время между сообщениями
+- Долгие паузы (несколько часов/дней) могут требовать более вежливого возобновления диалога
+- Быстрые ответы указывают на активную беседу
+- Если последнее сообщение было давно, учти это в тоне ответа
+
+ПРАВИЛА:
+- Отвечай на том же языке, что и диалог
+- Сохраняй тон и стиль беседы (формальный/неформальный)
+- Будь кратким и по существу
+- Отвечай на заданные вопросы
+- Не повторяй уже сказанное
+- Будь вежливым и естественным
+
+ФОРМАТ ОТВЕТА:
+Предложи только текст ответа, без дополнительных пояснений или комментариев."""
+
+
+# Загружаем промпт при старте приложения
+@app.on_event("startup")
+async def startup_event():
+    global SYSTEM_PROMPT
+    SYSTEM_PROMPT = load_system_prompt()
+    print("✅ Системный промпт загружен")
+    print(f"📝 Длина промпта: {len(SYSTEM_PROMPT)} символов")
 
 
 class Message(BaseModel):
@@ -51,7 +120,8 @@ async def root():
     return {
         "status": "ok",
         "service": "Respondo Backend",
-        "version": "1.0.0"
+        "version": "2.0.0",
+        "prompt_loaded": SYSTEM_PROMPT is not None
     }
 
 
@@ -59,6 +129,20 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy"}
+
+
+@app.post("/reload-prompt")
+async def reload_prompt():
+    """
+    Перезагружает системный промпт из файла без перезапуска сервера
+    """
+    global SYSTEM_PROMPT
+    SYSTEM_PROMPT = load_system_prompt()
+    return {
+        "status": "success",
+        "message": "Промпт перезагружен",
+        "prompt_length": len(SYSTEM_PROMPT)
+    }
 
 
 @app.post("/api/suggest-reply", response_model=DialogResponse)
@@ -71,8 +155,8 @@ async def suggest_reply(request: DialogRequest):
     start_time = datetime.now()
     
     try:
-        # Формируем промпт для LLM из истории диалога
-        dialog_text = format_dialog(request.messages)
+        # Формируем промпт для LLM из истории диалога с временными метками
+        dialog_text = format_dialog_with_time_analysis(request.messages)
         
         # Отправляем запрос к LLM API
         llm_response = await call_llm_api(dialog_text, request.context)
@@ -91,14 +175,94 @@ async def suggest_reply(request: DialogRequest):
         )
 
 
-def format_dialog(messages: List[Message]) -> str:
+def parse_timestamp(timestamp_str: str) -> datetime:
     """
-    Форматирует список сообщений в текстовый диалог для LLM
+    Парсит timestamp из разных форматов
+    """
+    # Попытка распарсить ISO формат
+    try:
+        return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+    except:
+        pass
+    
+    # Попытка распарсить другие форматы
+    formats = [
+        "%Y-%m-%d %H:%M:%S",
+        "%d.%m.%Y %H:%M",
+        "%H:%M",
+    ]
+    
+    for fmt in formats:
+        try:
+            return datetime.strptime(timestamp_str, fmt)
+        except:
+            continue
+    
+    # Если не получилось распарсить, возвращаем текущее время
+    return datetime.now()
+
+
+def analyze_time_gaps(messages: List[Message]) -> str:
+    """
+    Анализирует временные промежутки между сообщениями
+    """
+    if len(messages) < 2:
+        return "Диалог только начался."
+    
+    try:
+        timestamps = [parse_timestamp(msg.timestamp) for msg in messages]
+        
+        # Анализируем последний промежуток
+        last_gap = timestamps[-1] - timestamps[-2]
+        total_duration = timestamps[-1] - timestamps[0]
+        
+        analysis = []
+        
+        # Анализ последнего промежутка
+        if last_gap.total_seconds() < 60:
+            analysis.append("Активная переписка (ответ в течение минуты)")
+        elif last_gap.total_seconds() < 3600:
+            minutes = int(last_gap.total_seconds() / 60)
+            analysis.append(f"Небольшая пауза ({minutes} мин)")
+        elif last_gap.total_seconds() < 86400:
+            hours = int(last_gap.total_seconds() / 3600)
+            analysis.append(f"Значительная пауза ({hours} ч)")
+        else:
+            days = int(last_gap.total_seconds() / 86400)
+            analysis.append(f"Долгая пауза ({days} дн)")
+        
+        # Общая длительность диалога
+        if total_duration.total_seconds() < 3600:
+            analysis.append("Быстрая беседа")
+        elif total_duration.total_seconds() < 86400:
+            analysis.append("Диалог в течение дня")
+        else:
+            analysis.append("Долгий диалог")
+        
+        return " | ".join(analysis)
+    
+    except:
+        return "Не удалось проанализировать временные промежутки"
+
+
+def format_dialog_with_time_analysis(messages: List[Message]) -> str:
+    """
+    Форматирует список сообщений в текстовый диалог с анализом времени
     """
     dialog_lines = []
     
-    for msg in messages:
-        dialog_lines.append(f"[{msg.timestamp}] {msg.author}: {msg.content}")
+    # Добавляем анализ временных промежутков
+    time_analysis = analyze_time_gaps(messages)
+    dialog_lines.append(f"=== ВРЕМЕННОЙ АНАЛИЗ ===")
+    dialog_lines.append(time_analysis)
+    dialog_lines.append(f"Всего сообщений: {len(messages)}")
+    dialog_lines.append("")
+    dialog_lines.append("=== ИСТОРИЯ ДИАЛОГА ===")
+    
+    # Форматируем сообщения
+    for i, msg in enumerate(messages):
+        prefix = "└─" if i == len(messages) - 1 else "├─"
+        dialog_lines.append(f"{prefix} [{msg.timestamp}] {msg.author}: {msg.content}")
     
     return "\n".join(dialog_lines)
 
@@ -108,33 +272,25 @@ async def call_llm_api(dialog: str, context: str = "") -> str:
     Отправляет запрос к Google Gemini API и возвращает предложенный ответ
     """
     
-    # Формируем промпт
-    system_instruction = """Ты - ассистент, который помогает писать ответы на сообщения в диалогах.
-Твоя задача - проанализировать историю диалога и предложить уместный, вежливый и содержательный ответ.
-
-Требования к ответу:
-- Будь кратким и по делу
-- Учитывай контекст и тон беседы
-- Отвечай на том же языке, что и диалог
-- Не повторяй уже сказанное
-- Будь вежливым и профессиональным"""
+    # Используем загруженный системный промпт
+    system_instruction = SYSTEM_PROMPT
     
+    # Добавляем дополнительный контекст, если есть
     if context:
         system_instruction += f"\n\nДополнительный контекст: {context}"
     
-    prompt = f"""{system_instruction}
-
-Вот история диалога:
+    # Формируем финальный промпт
+    full_prompt = f"""{system_instruction}
 
 {dialog}
 
-Предложи подходящий ответ на последнее сообщение."""
+Проанализируй диалог выше (обрати особое внимание на временной анализ) и предложи подходящий ответ на последнее сообщение."""
     
     try:
         # Используем Google Genai SDK
         response = genai_client.models.generate_content(
             model="gemini-2.0-flash-exp",  # или gemini-1.5-flash, gemini-1.5-pro
-            contents=prompt
+            contents=full_prompt
         )
         
         return response.text.strip()
@@ -149,13 +305,16 @@ async def call_llm_api(dialog: str, context: str = "") -> str:
 @app.post("/api/test")
 async def test_endpoint(request: DialogRequest):
     """
-    Тестовый endpoint для проверки без реального вызова LLM
+    Тестовый endpoint для проверки форматирования без реального вызова LLM
     """
-    dialog_text = format_dialog(request.messages)
+    dialog_text = format_dialog_with_time_analysis(request.messages)
+    time_analysis = analyze_time_gaps(request.messages)
     
     return {
         "formatted_dialog": dialog_text,
+        "time_analysis": time_analysis,
         "message_count": len(request.messages),
+        "system_prompt_length": len(SYSTEM_PROMPT) if SYSTEM_PROMPT else 0,
         "test_reply": "Это тестовый ответ. LLM не вызывался."
     }
 

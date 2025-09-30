@@ -2,3 +2,4 @@
 backend/config.py
 backend/venv/
 backend/__pycache__/
+backend/prompts/
