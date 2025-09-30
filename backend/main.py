@@ -289,7 +289,7 @@ async def call_llm_api(dialog: str, context: str = "") -> str:
     try:
         # Используем Google Genai SDK
         response = genai_client.models.generate_content(
-            model="gemini-2.0-flash-exp",  # или gemini-1.5-flash, gemini-1.5-pro
+            model="gemini-2.5-flash-lite",  # или gemini-1.5-flash, gemini-1.5-pro
             contents=full_prompt
         )
         
