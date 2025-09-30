@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Respondo Assistant",
+  "version": "1.0",
+  "description": "AI assistant for VK messages",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://vk.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Respondo Assistant"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://vk.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
