@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <style>
     body {
-      width: 400px;
-      min-height: 300px;
+      width: 450px;
+      min-height: 200px;
       max-height: 600px;
       padding: 15px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -27,12 +27,94 @@
       font-size: 14px;
     }
     
+    button {
+      width: 100%;
+      padding: 12px;
+      background: #2196F3;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 500;
+      margin-bottom: 15px;
+    }
+    
+    button:hover:not(:disabled) {
+      background: #0b7dda;
+    }
+    
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    
+    #aiResponse {
+      display: none;
+    }
+    
+    #aiResponse.show {
+      display: block;
+    }
+    
+    #aiResponse h3 {
+      margin: 0 0 10px 0;
+      font-size: 14px;
+      color: #333;
+    }
+    
+    #responseContainer {
+      position: relative;
+    }
+    
+    #aiResponseText {
+      width: 100%;
+      min-height: 100px;
+      padding: 12px;
+      border: 2px solid #2196F3;
+      border-radius: 5px;
+      font-size: 14px;
+      line-height: 1.5;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      resize: vertical;
+      box-sizing: border-box;
+    }
+    
+    #copyBtn {
+      margin-top: 10px;
+      background: #4CAF50;
+    }
+    
+    #copyBtn:hover:not(:disabled) {
+      background: #45a049;
+    }
+    
+    #copyBtn.copied {
+      background: #4CAF50;
+    }
+    
+    #debugBtn {
+      background: #757575;
+      font-size: 13px;
+      padding: 8px;
+    }
+    
+    #debugBtn:hover:not(:disabled) {
+      background: #616161;
+    }
+    
     #messages {
-      max-height: 450px;
+      max-height: 300px;
       overflow-y: auto;
       border: 1px solid #ddd;
       border-radius: 5px;
       padding: 10px;
+      margin-bottom: 15px;
+      display: none;
+    }
+    
+    #messages.show {
+      display: block;
     }
     
     .message {
@@ -63,34 +145,37 @@
       color: #333;
     }
     
-    button {
-      width: 100%;
-      padding: 10px;
-      background: #4CAF50;
-      color: white;
-      border: none;
-      border-radius: 5px;
-      cursor: pointer;
-      font-size: 14px;
-      margin-bottom: 10px;
-    }
-    
-    button:hover {
-      background: #45a049;
-    }
-    
     .empty {
       text-align: center;
       color: #999;
       padding: 20px;
     }
+    
+    .loading {
+      text-align: center;
+      padding: 20px;
+      color: #666;
+    }
   </style>
 </head>
 <body>
   <h2>Respondo Assistant</h2>
-  <button id="loadMessages">Загрузить диалог</button>
-  <div id="status">Нажмите кнопку для загрузки сообщений</div>
+  
+  <div id="status">Нажмите кнопку для генерации ответа</div>
+  
+  <button id="generateBtn">Придумать ответ</button>
+  
+  <div id="aiResponse">
+    <h3>💡 Предложенный ответ:</h3>
+    <div id="responseContainer">
+      <textarea id="aiResponseText" readonly></textarea>
+      <button id="copyBtn">Скопировать ответ</button>
+    </div>
+  </div>
+  
   <div id="messages"></div>
+  
+  <button id="debugBtn">Проверить диалог</button>
   
   <script src="popup.js"></script>
 </body>
