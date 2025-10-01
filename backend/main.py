@@ -4,17 +4,33 @@ from pydantic import BaseModel
 from typing import List
 from datetime import datetime
 from google import genai
+from google.genai import types
 import os
 from pathlib import Path
 
-# Импортируем API ключ из config.py
+# Импортируем настройки из config.py
 try:
-    from config import API_KEY
+    from config import API_KEY, USE_CUSTOM_ENDPOINT, CUSTOM_API_URL, MODEL_NAME
 except ImportError:
-    raise Exception("Файл config.py не найден! Создайте файл backend/config.py с переменной API_KEY")
+    raise Exception(
+        "Файл config.py не найден или неполный!\n"
+        "Создайте файл backend/config.py со следующими переменными:\n"
+        "  API_KEY = 'your-api-key'\n"
+        "  USE_CUSTOM_ENDPOINT = False  # True для custom endpoint\n"
+        "  CUSTOM_API_URL = 'https://hubai.loe.gg'  # URL custom endpoint\n"
+        "  MODEL_NAME = 'gemini-2.0-flash-lite'  # Название модели"
+    )
 
 # Инициализируем Google Genai клиент
-genai_client = genai.Client(api_key=API_KEY)
+if USE_CUSTOM_ENDPOINT:
+    print(f"🔧 Используется custom endpoint: {CUSTOM_API_URL}")
+    genai_client = genai.Client(
+        api_key=API_KEY,
+        http_options=types.HttpOptions(base_url=CUSTOM_API_URL)
+    )
+else:
+    print("🔧 Используется стандартный Google API endpoint")
+    genai_client = genai.Client(api_key=API_KEY)
 
 app = FastAPI(title="Respondo Backend")
 
@@ -93,6 +109,11 @@ async def startup_event():
     SYSTEM_PROMPT = load_system_prompt()
     print("✅ Системный промпт загружен")
     print(f"📝 Длина промпта: {len(SYSTEM_PROMPT)} символов")
+    print(f"🤖 Модель: {MODEL_NAME}")
+    if USE_CUSTOM_ENDPOINT:
+        print(f"🔗 Custom API endpoint: {CUSTOM_API_URL}")
+    else:
+        print(f"🔗 Standard Google API endpoint")
 
 
 class Message(BaseModel):
@@ -120,8 +141,11 @@ async def root():
     return {
         "status": "ok",
         "service": "Respondo Backend",
-        "version": "2.0.0",
-        "prompt_loaded": SYSTEM_PROMPT is not None
+        "version": "2.1.0",
+        "prompt_loaded": SYSTEM_PROMPT is not None,
+        "model": MODEL_NAME,
+        "endpoint_type": "custom" if USE_CUSTOM_ENDPOINT else "standard",
+        "api_endpoint": CUSTOM_API_URL if USE_CUSTOM_ENDPOINT else "api.google.com"
     }
 
 
@@ -269,7 +293,7 @@ def format_dialog_with_time_analysis(messages: List[Message]) -> str:
 
 async def call_llm_api(dialog: str, context: str = "") -> str:
     """
-    Отправляет запрос к Google Gemini API и возвращает предложенный ответ
+    Отправляет запрос к Gemini API и возвращает предложенный ответ
     """
     
     # Используем загруженный системный промпт
@@ -289,7 +313,7 @@ async def call_llm_api(dialog: str, context: str = "") -> str:
     try:
         # Используем Google Genai SDK
         response = genai_client.models.generate_content(
-            model="gemini-2.5-flash-lite",  # или gemini-1.5-flash, gemini-1.5-pro
+            model=MODEL_NAME,
             contents=full_prompt
         )
         
