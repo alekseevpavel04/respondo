@@ -180,10 +180,10 @@ async def suggest_reply(request: DialogRequest):
     
     try:
         # Формируем промпт для LLM из истории диалога с временными метками
-        dialog_text = format_dialog_with_time_analysis(request.messages)
+        dialog_text = format_dialog_with_time_analysis(request.messages, start_time)
         
         # Отправляем запрос к LLM API
-        llm_response = await call_llm_api(dialog_text, request.context)
+        llm_response = await call_llm_api(dialog_text, request.context, start_time)
         
         processing_time = (datetime.now() - start_time).total_seconds()
         
@@ -226,57 +226,80 @@ def parse_timestamp(timestamp_str: str) -> datetime:
     return datetime.now()
 
 
-def analyze_time_gaps(messages: List[Message]) -> str:
+def analyze_time_gaps(messages: List[Message], current_time: datetime) -> str:
     """
-    Анализирует временные промежутки между сообщениями
+    Анализирует временные промежутки между сообщениями с учетом текущего времени
     """
-    if len(messages) < 2:
-        return "Диалог только начался."
+    if len(messages) < 1:
+        return "Диалог пуст."
     
     try:
         timestamps = [parse_timestamp(msg.timestamp) for msg in messages]
         
-        # Анализируем последний промежуток
-        last_gap = timestamps[-1] - timestamps[-2]
-        total_duration = timestamps[-1] - timestamps[0]
+        # Анализируем время с последнего сообщения ДО СЕЙЧАС
+        last_message_time = timestamps[-1]
+        time_since_last = current_time - last_message_time
         
         analysis = []
         
-        # Анализ последнего промежутка
-        if last_gap.total_seconds() < 60:
-            analysis.append("Активная переписка (ответ в течение минуты)")
-        elif last_gap.total_seconds() < 3600:
-            minutes = int(last_gap.total_seconds() / 60)
-            analysis.append(f"Небольшая пауза ({minutes} мин)")
-        elif last_gap.total_seconds() < 86400:
-            hours = int(last_gap.total_seconds() / 3600)
-            analysis.append(f"Значительная пауза ({hours} ч)")
+        # Анализ времени с последнего сообщения
+        if time_since_last.total_seconds() < 60:
+            analysis.append("📨 Последнее сообщение только что (менее минуты назад)")
+        elif time_since_last.total_seconds() < 300:  # 5 минут
+            minutes = int(time_since_last.total_seconds() / 60)
+            analysis.append(f"📨 Последнее сообщение {minutes} мин назад")
+        elif time_since_last.total_seconds() < 3600:
+            minutes = int(time_since_last.total_seconds() / 60)
+            analysis.append(f"⏰ Последнее сообщение {minutes} мин назад")
+        elif time_since_last.total_seconds() < 86400:
+            hours = int(time_since_last.total_seconds() / 3600)
+            analysis.append(f"⏰ Последнее сообщение {hours} ч назад")
         else:
-            days = int(last_gap.total_seconds() / 86400)
-            analysis.append(f"Долгая пауза ({days} дн)")
+            days = int(time_since_last.total_seconds() / 86400)
+            analysis.append(f"📅 Последнее сообщение {days} дн назад")
+        
+        # Анализ темпа диалога (если больше 1 сообщения)
+        if len(messages) > 1:
+            last_gap = timestamps[-1] - timestamps[-2]
+            
+            if last_gap.total_seconds() < 60:
+                analysis.append("⚡ Активная переписка")
+            elif last_gap.total_seconds() < 3600:
+                minutes = int(last_gap.total_seconds() / 60)
+                analysis.append(f"💬 Пауза в диалоге была {minutes} мин")
+            elif last_gap.total_seconds() < 86400:
+                hours = int(last_gap.total_seconds() / 3600)
+                analysis.append(f"💬 Пауза в диалоге была {hours} ч")
         
         # Общая длительность диалога
-        if total_duration.total_seconds() < 3600:
-            analysis.append("Быстрая беседа")
-        elif total_duration.total_seconds() < 86400:
-            analysis.append("Диалог в течение дня")
-        else:
-            analysis.append("Долгий диалог")
+        if len(messages) > 1:
+            total_duration = timestamps[-1] - timestamps[0]
+            if total_duration.total_seconds() < 3600:
+                analysis.append("📊 Быстрая беседа")
+            elif total_duration.total_seconds() < 86400:
+                analysis.append("📊 Диалог в течение дня")
+            else:
+                days = int(total_duration.total_seconds() / 86400)
+                analysis.append(f"📊 Диалог длится {days} дн")
         
         return " | ".join(analysis)
     
-    except:
-        return "Не удалось проанализировать временные промежутки"
+    except Exception as e:
+        return f"Ошибка анализа времени: {str(e)}"
 
 
-def format_dialog_with_time_analysis(messages: List[Message]) -> str:
+def format_dialog_with_time_analysis(messages: List[Message], current_time: datetime) -> str:
     """
     Форматирует список сообщений в текстовый диалог с анализом времени
     """
     dialog_lines = []
     
+    # Добавляем текущее время
+    dialog_lines.append(f"🕐 ТЕКУЩЕЕ ВРЕМЯ: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    dialog_lines.append("")
+    
     # Добавляем анализ временных промежутков
-    time_analysis = analyze_time_gaps(messages)
+    time_analysis = analyze_time_gaps(messages, current_time)
     dialog_lines.append(f"=== ВРЕМЕННОЙ АНАЛИЗ ===")
     dialog_lines.append(time_analysis)
     dialog_lines.append(f"Всего сообщений: {len(messages)}")
@@ -291,13 +314,19 @@ def format_dialog_with_time_analysis(messages: List[Message]) -> str:
     return "\n".join(dialog_lines)
 
 
-async def call_llm_api(dialog: str, context: str = "") -> str:
+async def call_llm_api(dialog: str, context: str = "", current_time: datetime = None) -> str:
     """
     Отправляет запрос к Gemini API и возвращает предложенный ответ
     """
     
     # Используем загруженный системный промпт
     system_instruction = SYSTEM_PROMPT
+    
+    # Добавляем информацию о текущем времени
+    if current_time:
+        system_instruction = f"""ТЕКУЩАЯ ДАТА И ВРЕМЯ: {current_time.strftime('%Y-%m-%d %H:%M:%S')}
+
+{system_instruction}"""
     
     # Добавляем дополнительный контекст, если есть
     if context:
@@ -308,7 +337,7 @@ async def call_llm_api(dialog: str, context: str = "") -> str:
 
 {dialog}
 
-Проанализируй диалог выше (обрати особое внимание на временной анализ) и предложи подходящий ответ на последнее сообщение."""
+Проанализируй диалог выше (обрати особое внимание на временной анализ и текущее время) и предложи подходящий ответ на последнее сообщение."""
     
     try:
         # Используем Google Genai SDK
@@ -331,10 +360,12 @@ async def test_endpoint(request: DialogRequest):
     """
     Тестовый endpoint для проверки форматирования без реального вызова LLM
     """
-    dialog_text = format_dialog_with_time_analysis(request.messages)
-    time_analysis = analyze_time_gaps(request.messages)
+    current_time = datetime.now()
+    dialog_text = format_dialog_with_time_analysis(request.messages, current_time)
+    time_analysis = analyze_time_gaps(request.messages, current_time)
     
     return {
+        "current_time": current_time.isoformat(),
         "formatted_dialog": dialog_text,
         "time_analysis": time_analysis,
         "message_count": len(request.messages),
