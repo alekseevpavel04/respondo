@@ -1,32 +1,126 @@
-// popup.js - скрипт для popup окна расширения
-
 let currentMessages = [];
 const API_URL = 'http://localhost:8000';
 
-document.getElementById('generateBtn').addEventListener('click', generateResponse);
-document.getElementById('debugBtn').addEventListener('click', debugDialog);
-document.getElementById('copyBtn').addEventListener('click', copyResponse);
+// Элементы интерфейса
+const loadingContainer = document.getElementById('loadingContainer');
+const resultContainer = document.getElementById('resultContainer');
+const errorContainer = document.getElementById('errorContainer');
+const timerElement = document.getElementById('timer');
+const timeInfoElement = document.getElementById('timeInfo');
+const aiResponseText = document.getElementById('aiResponseText');
+const errorMessage = document.getElementById('errorMessage');
 
-async function loadMessages() {
-  const statusDiv = document.getElementById('status');
+// Секундомер
+let startTime;
+let timerInterval;
+
+// Форматирование времени: секунды:миллисекунды
+function formatTime(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const milliseconds = Math.floor((ms % 1000) / 10); // Двузначные миллисекунды
+  return `${totalSeconds}:${milliseconds.toString().padStart(2, '0')}`;
+}
+
+// Форматирование финального времени
+function formatFinalTime(ms) {
+  const seconds = (ms / 1000).toFixed(2);
+  return `${seconds} сек`;
+}
+
+// Запуск секундомера
+function startTimer() {
+  startTime = Date.now();
+  timerInterval = setInterval(() => {
+    const elapsed = Date.now() - startTime;
+    timerElement.textContent = formatTime(elapsed);
+  }, 10); // Обновляем каждые 10мс для миллисекунд
+}
+
+// Остановка секундомера
+function stopTimer() {
+  if (timerInterval) {
+    clearInterval(timerInterval);
+  }
+  return Date.now() - startTime;
+}
+
+// Копирование в буфер обмена
+function copyToClipboard(text) {
+  // Используем современный Clipboard API
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(err => {
+      console.error('Ошибка копирования:', err);
+      // Fallback на старый метод
+      fallbackCopy(text);
+    });
+  } else {
+    fallbackCopy(text);
+  }
+}
+
+// Fallback метод копирования
+function fallbackCopy(text) {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+}
+
+// Показать результат
+function showResult(text, elapsedMs) {
+  const finalTime = stopTimer();
   
+  // Расширяем окно для показа результата
+  document.body.style.width = '450px';
+  document.body.style.padding = '15px';
+  
+  loadingContainer.classList.add('hidden');
+  resultContainer.classList.add('show');
+  errorContainer.classList.remove('show');
+  
+  timeInfoElement.textContent = `⏱ Время генерации: ${formatFinalTime(finalTime)}`;
+  aiResponseText.value = text;
+  
+  // Автоматически копируем в буфер обмена
+  copyToClipboard(text);
+  console.log('Ответ скопирован в буфер обмена');
+}
+
+// Показать ошибку
+function showError(errorText) {
+  stopTimer();
+  
+  // Расширяем окно для показа ошибки
+  document.body.style.width = '350px';
+  document.body.style.padding = '15px';
+  
+  loadingContainer.classList.add('hidden');
+  resultContainer.classList.remove('show');
+  errorContainer.classList.add('show');
+  
+  errorMessage.textContent = errorText;
+}
+
+// Загрузка сообщений из VK
+async function loadMessages() {
   try {
     // Получаем активную вкладку
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     
     // Проверяем, что мы на VK
     if (!tab.url.includes('vk.com')) {
-      statusDiv.textContent = 'Ошибка: откройте диалог в VK';
-      return null;
+      throw new Error('Откройте диалог в VK');
     }
     
     // Отправляем запрос в content script
     return new Promise((resolve, reject) => {
       chrome.tabs.sendMessage(tab.id, { action: 'getMessages' }, (response) => {
         if (chrome.runtime.lastError) {
-          statusDiv.textContent = 'Ошибка: перезагрузите страницу VK';
-          console.error(chrome.runtime.lastError);
-          reject(chrome.runtime.lastError);
+          reject(new Error('Перезагрузите страницу VK'));
           return;
         }
         
@@ -34,95 +128,30 @@ async function loadMessages() {
           currentMessages = response.messages;
           resolve(response.messages);
         } else {
-          statusDiv.textContent = 'Сообщения не найдены';
-          resolve([]);
+          reject(new Error('Сообщения не найдены в диалоге'));
         }
       });
     });
     
   } catch (error) {
-    statusDiv.textContent = 'Произошла ошибка';
-    console.error(error);
-    return null;
+    throw error;
   }
 }
 
-async function debugDialog() {
-  const statusDiv = document.getElementById('status');
-  const messagesDiv = document.getElementById('messages');
-  
-  statusDiv.textContent = 'Загрузка сообщений...';
-  messagesDiv.innerHTML = '';
-  messagesDiv.classList.remove('show');
-  
-  const messages = await loadMessages();
-  
-  if (messages && messages.length > 0) {
-    displayMessages(messages);
-    messagesDiv.classList.add('show');
-    statusDiv.textContent = `Загружено сообщений: ${messages.length}`;
-  }
-}
-
-function displayMessages(messages) {
-  const messagesDiv = document.getElementById('messages');
-  
-  if (messages.length === 0) {
-    messagesDiv.innerHTML = '<div class="empty">Сообщения не найдены в текущем диалоге</div>';
-    return;
-  }
-  
-  // Сортируем по времени
-  messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-  
-  messages.forEach(msg => {
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `message ${msg.role}`;
-    
-    const headerDiv = document.createElement('div');
-    headerDiv.className = 'message-header';
-    headerDiv.textContent = `${msg.role === 'user' ? 'Клиент' : 'Вы'} | ${msg.date || 'время неизвестно'}`;
-    
-    const textDiv = document.createElement('div');
-    textDiv.className = 'message-text';
-    textDiv.textContent = msg.text;
-    
-    messageDiv.appendChild(headerDiv);
-    messageDiv.appendChild(textDiv);
-    messagesDiv.appendChild(messageDiv);
-  });
-  
-  // Прокручиваем вниз к последним сообщениям
-  messagesDiv.scrollTop = messagesDiv.scrollHeight;
-}
-
+// Генерация ответа
 async function generateResponse() {
-  const statusDiv = document.getElementById('status');
-  const generateBtn = document.getElementById('generateBtn');
-  const aiResponse = document.getElementById('aiResponse');
-  const aiResponseText = document.getElementById('aiResponseText');
-  const messagesDiv = document.getElementById('messages');
-  
-  generateBtn.disabled = true;
-  statusDiv.textContent = 'Загрузка диалога...';
-  aiResponse.classList.remove('show');
-  messagesDiv.classList.remove('show');
-  
-  // Сначала загружаем сообщения
-  const messages = await loadMessages();
-  
-  if (!messages || messages.length === 0) {
-    statusDiv.textContent = 'Не удалось загрузить сообщения';
-    generateBtn.disabled = false;
-    return;
-  }
-  
-  statusDiv.textContent = 'Генерация ответа...';
-  aiResponseText.value = '⏳ Ожидание ответа от LLM...';
-  aiResponse.classList.add('show');
-  
   try {
-    // Формируем данные в формате вашего API
+    // Запускаем секундомер
+    startTimer();
+    
+    // Загружаем сообщения
+    const messages = await loadMessages();
+    
+    if (!messages || messages.length === 0) {
+      throw new Error('Не удалось загрузить сообщения из диалога');
+    }
+    
+    // Формируем данные для API
     const requestData = {
       messages: messages.map(msg => ({
         author: msg.role === 'user' ? 'Клиент' : 'Вы',
@@ -134,7 +163,7 @@ async function generateResponse() {
     
     console.log('Отправка запроса:', requestData);
     
-    // Отправляем запрос на ваш FastAPI endpoint
+    // Отправляем запрос на FastAPI
     const response = await fetch(`${API_URL}/api/suggest-reply`, {
       method: 'POST',
       headers: {
@@ -145,45 +174,50 @@ async function generateResponse() {
     
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+      throw new Error(errorData.detail || `Ошибка сервера: ${response.status}`);
     }
     
     const data = await response.json();
     console.log('Получен ответ:', data);
     
-    // Отображаем ответ
-    aiResponseText.value = data.suggested_reply || 'Ответ получен, но текст пуст';
-    statusDiv.textContent = `Ответ сгенерирован за ${data.processing_time?.toFixed(2) || '?'} сек`;
+    // Показываем результат
+    const responseText = data.suggested_reply || 'Ответ получен, но текст пуст';
+    const elapsedMs = Date.now() - startTime;
+    showResult(responseText, elapsedMs);
     
   } catch (error) {
-    console.error('Ошибка при генерации ответа:', error);
-    aiResponseText.value = `Ошибка: ${error.message}\n\nПроверьте:\n1. Сервер запущен на ${API_URL}\n2. Файл config.py существует с API_KEY\n3. API ключ Google Gemini валиден`;
-    statusDiv.textContent = 'Ошибка при генерации ответа';
-  } finally {
-    generateBtn.disabled = false;
+    console.error('Ошибка при генерации:', error);
+    
+    let errorText = `Ошибка: ${error.message}\n\n`;
+    
+    if (error.message.includes('VK')) {
+      errorText += 'Откройте диалог на сайте vk.com';
+    } else if (error.message.includes('Перезагрузите')) {
+      errorText += 'Перезагрузите страницу VK и попробуйте снова';
+    } else if (error.message.includes('сервера') || error.message.includes('Failed to fetch')) {
+      errorText += `Проверьте:\n• Сервер запущен на ${API_URL}\n• Файл config.py содержит API_KEY\n• API ключ Google Gemini валиден`;
+    } else {
+      errorText += 'Попробуйте перезагрузить страницу';
+    }
+    
+    showError(errorText);
   }
 }
 
-function copyResponse() {
-  const aiResponseText = document.getElementById('aiResponseText');
-  const copyBtn = document.getElementById('copyBtn');
+// Обработчик кнопки повтора
+document.getElementById('retryBtn').addEventListener('click', () => {
+  // Возвращаем компактное окно
+  document.body.style.width = '';
+  document.body.style.padding = '8px';
   
-  // Копируем текст
-  aiResponseText.select();
-  document.execCommand('copy');
+  // Скрываем ошибку и показываем загрузку
+  errorContainer.classList.remove('show');
+  loadingContainer.classList.remove('hidden');
   
-  // Визуальная обратная связь
-  const originalText = copyBtn.textContent;
-  copyBtn.textContent = '✓ Скопировано!';
-  copyBtn.classList.add('copied');
-  
-  setTimeout(() => {
-    copyBtn.textContent = originalText;
-    copyBtn.classList.remove('copied');
-  }, 2000);
-}
-
-// Автоматическая загрузка при открытии popup
-window.addEventListener('load', () => {
-  console.log('Popup loaded');
+  // Запускаем генерацию заново
+  generateResponse();
 });
+
+// АВТОЗАПУСК при открытии popup
+console.log('Popup opened, starting generation...');
+generateResponse();
